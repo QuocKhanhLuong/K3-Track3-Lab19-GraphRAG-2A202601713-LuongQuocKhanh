@@ -35,7 +35,6 @@ def _extract_named_value(raw_value, key):
     if not raw:
         return ""
 
-    # If the secret contains one or more KEY=value lines, extract the requested key.
     match = re.search(
         rf"(?mi)^\s*{re.escape(key)}\s*=\s*([^\r\n#]+?)\s*$",
         raw,
@@ -43,13 +42,23 @@ def _extract_named_value(raw_value, key):
     if match:
         return _strip_wrapping(match.group(1))
 
-    # Also tolerate a single-line `KEY = VALUE` value without a final newline.
     match = re.match(rf"(?i)^\s*{re.escape(key)}\s*=\s*(.+?)\s*$", raw)
     if match:
         return _strip_wrapping(match.group(1))
 
-    # Otherwise treat the secret as the value itself.
     return raw
+
+
+def _extract_block_value(raw_value, key):
+    """Extract KEY from a multi-line credentials block; return empty if absent."""
+    raw = _strip_wrapping(raw_value)
+    if not raw:
+        return ""
+    match = re.search(
+        rf"(?mi)^\s*{re.escape(key)}\s*=\s*([^\r\n#]+?)\s*$",
+        raw,
+    )
+    return _strip_wrapping(match.group(1)) if match else ""
 
 
 def _secret_first(*names, default=""):
@@ -67,7 +76,6 @@ def _normalize_neo4j_uri(value):
     if not raw:
         return ""
 
-    # Prefer an explicit URI found anywhere in the value/block.
     match = re.search(
         r"(?i)((?:neo4j|bolt)(?:\+s|\+ssc)?://[^\s'\"`]+)",
         raw,
@@ -75,7 +83,6 @@ def _normalize_neo4j_uri(value):
     if match:
         return match.group(1).rstrip(",;")
 
-    # Aura host copied without a scheme -> use the secure routed Neo4j scheme.
     match = re.search(r"(?i)([a-z0-9-]+\.databases\.neo4j\.io)", raw)
     if match:
         return "neo4j+s://" + match.group(1)
@@ -85,15 +92,29 @@ def _normalize_neo4j_uri(value):
 
 # -----------------------------------------------------------------------------
 # Neo4j Aura credentials
-# Aura credential downloads use NEO4J_USERNAME while the starter notebook used
-# NEO4J_USER. Prefer the official Aura name when both happen to exist, then
-# expose both globals so every notebook cell sees the same value.
+# Preferred setup: one Colab Secret named NEO4J_CREDENTIALS containing the full
+# downloaded Aura credential file. This removes cross-secret stale/mismatch risk.
+# Separate NEO4J_* secrets remain supported as a fallback.
 # -----------------------------------------------------------------------------
-NEO4J_URI = _normalize_neo4j_uri(_secret_first("NEO4J_URI"))
-NEO4J_USER = _secret_first("NEO4J_USERNAME", "NEO4J_USER")
+_AURA_BLOCK = _strip_wrapping(get_secret("NEO4J_CREDENTIALS", ""))
+
+if _AURA_BLOCK:
+    NEO4J_URI = _normalize_neo4j_uri(_extract_block_value(_AURA_BLOCK, "NEO4J_URI"))
+    NEO4J_USER = (
+        _extract_block_value(_AURA_BLOCK, "NEO4J_USERNAME")
+        or _extract_block_value(_AURA_BLOCK, "NEO4J_USER")
+    )
+    NEO4J_PASSWORD = _extract_block_value(_AURA_BLOCK, "NEO4J_PASSWORD")
+    NEO4J_DATABASE = _extract_block_value(_AURA_BLOCK, "NEO4J_DATABASE") or "neo4j"
+    NEO4J_CREDENTIAL_SOURCE = "NEO4J_CREDENTIALS block"
+else:
+    NEO4J_URI = _normalize_neo4j_uri(_secret_first("NEO4J_URI"))
+    NEO4J_USER = _secret_first("NEO4J_USERNAME", "NEO4J_USER")
+    NEO4J_PASSWORD = _secret_first("NEO4J_PASSWORD")
+    NEO4J_DATABASE = _secret_first("NEO4J_DATABASE", default="neo4j")
+    NEO4J_CREDENTIAL_SOURCE = "individual NEO4J_* secrets"
+
 NEO4J_USERNAME = NEO4J_USER
-NEO4J_PASSWORD = _secret_first("NEO4J_PASSWORD")
-NEO4J_DATABASE = _secret_first("NEO4J_DATABASE", default="neo4j")
 
 _supported_neo4j_schemes = (
     "neo4j://",
@@ -116,20 +137,20 @@ _missing_neo4j = [
 ]
 if _missing_neo4j:
     raise RuntimeError(
-        "Missing Neo4j Colab Secrets: " + ", ".join(_missing_neo4j)
+        "Missing Neo4j credentials: " + ", ".join(_missing_neo4j) + ". "
+        "Recommended: create one Colab Secret named NEO4J_CREDENTIALS and paste "
+        "the complete Aura credential file into it."
     )
 if not NEO4J_URI.lower().startswith(_supported_neo4j_schemes):
     raise RuntimeError(
-        "Could not parse NEO4J_URI from the Colab Secret. Supported inputs: "
-        "`neo4j+s://...`, `NEO4J_URI=neo4j+s://...`, a full Aura credential block, "
-        "or an Aura hostname ending in `.databases.neo4j.io`."
+        "Could not parse NEO4J_URI. Recommended: create one Colab Secret named "
+        "NEO4J_CREDENTIALS and paste the complete Aura credential file into it."
     )
 
 
 # -----------------------------------------------------------------------------
 # OpenAI is forced for the entire one-click run. Old GROQ/JUDGE_PROVIDER secrets
-# are intentionally ignored so a stale Colab Secret cannot silently switch the
-# pipeline or judge back to Groq.
+# are intentionally ignored so a stale Colab Secret cannot switch the run back.
 # -----------------------------------------------------------------------------
 from openai import OpenAI
 
@@ -145,9 +166,6 @@ JUDGE_PROVIDER = "openai"
 JUDGE_MODEL = _secret_first("JUDGE_MODEL", default=LLM_MODEL)
 
 
-# Replace the starter wrapper with an OpenAI-compatible, rate-limit-tolerant
-# wrapper. Call signatures stay identical, so coref / extraction / retrieval /
-# answer generation do not need changes.
 def groq_chat(messages, model=None, json_mode=False, max_retries=8):
     model = model or GROQ_MODEL
     last_error = None
@@ -242,8 +260,6 @@ def pick_col(df, candidates, required=True):
 
 LAB_MAX_ARTICLES = int(_secret_first("LAB_MAX_ARTICLES", default="5000"))
 LAB_MAX_CHUNKS = int(_secret_first("LAB_MAX_CHUNKS", default="12000"))
-# Extract every chunk retained from the first-5000 corpus by default. This avoids
-# silently missing late Golden evidence (for example source rows near 5,000).
 EXTRACTION_MAX_CHUNKS = int(
     _secret_first("EXTRACTION_MAX_CHUNKS", default=str(LAB_MAX_CHUNKS))
 )
@@ -253,19 +269,33 @@ os.environ["EXTRACT_BATCH_SIZE"] = _secret_first("EXTRACT_BATCH_SIZE", default="
 
 
 # -----------------------------------------------------------------------------
-# Automatic fail-fast preflight. Called by the one-click notebook before any
-# expensive coreference/extraction work.
+# Automatic fail-fast preflight before any expensive LLM extraction.
 # -----------------------------------------------------------------------------
 def preflight_services():
     from neo4j import GraphDatabase
+    from neo4j.exceptions import AuthError
 
     print("\n[preflight] Neo4j Aura...")
+    print(f"[preflight] credential source: {NEO4J_CREDENTIAL_SOURCE}")
+    print(f"[preflight] uri: {NEO4J_URI}")
+    print(f"[preflight] username: {NEO4J_USER}")
+    print(f"[preflight] database: {NEO4J_DATABASE}")
+
     test_driver = GraphDatabase.driver(
         NEO4J_URI,
         auth=(NEO4J_USER, NEO4J_PASSWORD),
     )
     try:
-        test_driver.verify_connectivity()
+        try:
+            test_driver.verify_connectivity()
+        except AuthError as exc:
+            raise RuntimeError(
+                "Neo4j Aura rejected the username/password. The URI reached Aura, "
+                "so this is an authentication credential mismatch, not a URI/parser "
+                "error. Re-download/reset the Aura instance credentials and update "
+                "NEO4J_CREDENTIALS (recommended)."
+            ) from exc
+
         with test_driver.session(database=NEO4J_DATABASE) as session:
             ok = session.run("RETURN 1 AS ok").single()["ok"]
         if ok != 1:
@@ -287,13 +317,14 @@ def preflight_services():
 
 print("=" * 72)
 print("Lab 19 runtime patch active")
-print(f"LLM provider         : {LLM_PROVIDER}")
-print(f"Pipeline model       : {GROQ_MODEL}")
-print(f"Judge                : {JUDGE_PROVIDER} / {JUDGE_MODEL}")
-print(f"Neo4j URI loaded     : {bool(NEO4J_URI)}")
-print(f"Neo4j user           : {NEO4J_USER}")
-print(f"Neo4j database       : {NEO4J_DATABASE}")
-print(f"LAB_MAX_ARTICLES     : {LAB_MAX_ARTICLES}")
-print(f"LAB_MAX_CHUNKS       : {LAB_MAX_CHUNKS}")
-print(f"EXTRACTION_MAX_CHUNKS: {EXTRACTION_MAX_CHUNKS}")
+print(f"LLM provider          : {LLM_PROVIDER}")
+print(f"Pipeline model        : {GROQ_MODEL}")
+print(f"Judge                 : {JUDGE_PROVIDER} / {JUDGE_MODEL}")
+print(f"Neo4j credential src  : {NEO4J_CREDENTIAL_SOURCE}")
+print(f"Neo4j URI loaded      : {bool(NEO4J_URI)}")
+print(f"Neo4j user            : {NEO4J_USER}")
+print(f"Neo4j database        : {NEO4J_DATABASE}")
+print(f"LAB_MAX_ARTICLES      : {LAB_MAX_ARTICLES}")
+print(f"LAB_MAX_CHUNKS        : {LAB_MAX_CHUNKS}")
+print(f"EXTRACTION_MAX_CHUNKS : {EXTRACTION_MAX_CHUNKS}")
 print("=" * 72)
