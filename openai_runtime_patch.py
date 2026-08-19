@@ -3,7 +3,7 @@
 Run after the reference notebook definition cells and before colab_solution.py.
 The patch intentionally keeps the starter notebook's legacy names
 (groq_client, GROQ_MODEL, groq_chat, groq_json) so the rest of the lab can run
-unchanged while using OpenAI by default.
+unchanged while using OpenAI end-to-end.
 """
 
 import json
@@ -84,38 +84,25 @@ if not NEO4J_URI.startswith(_supported_neo4j_schemes):
 
 
 # -----------------------------------------------------------------------------
-# LLM provider. OpenAI is the default for the full pipeline and judge.
+# OpenAI is forced for the entire one-click run. Old GROQ/JUDGE_PROVIDER secrets
+# are intentionally ignored so a stale Colab Secret cannot silently switch the
+# pipeline or judge back to Groq.
 # -----------------------------------------------------------------------------
-LLM_PROVIDER = _secret_first("LLM_PROVIDER", default="openai").lower()
+from openai import OpenAI
+
+LLM_PROVIDER = "openai"
 LLM_MODEL = _secret_first("LLM_MODEL", default="gpt-4.1-mini")
+OPENAI_API_KEY = _secret_first("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    raise RuntimeError("Missing OPENAI_API_KEY in Colab Secrets.")
 
-if LLM_PROVIDER == "openai":
-    from openai import OpenAI
-
-    OPENAI_API_KEY = _secret_first("OPENAI_API_KEY")
-    if not OPENAI_API_KEY:
-        raise RuntimeError("Missing OPENAI_API_KEY in Colab Secrets.")
-
-    groq_client = OpenAI(api_key=OPENAI_API_KEY)
-    GROQ_MODEL = LLM_MODEL
-    JUDGE_PROVIDER = _secret_first("JUDGE_PROVIDER", default="openai").lower()
-    JUDGE_MODEL = _secret_first("JUDGE_MODEL", default=LLM_MODEL)
-
-elif LLM_PROVIDER == "groq":
-    from groq import Groq
-
-    GROQ_API_KEY = _secret_first("GROQ_API_KEY")
-    GROQ_MODEL = _secret_first("GROQ_MODEL", default="llama-3.3-70b-versatile")
-    if not GROQ_API_KEY:
-        raise RuntimeError("LLM_PROVIDER=groq requires GROQ_API_KEY.")
-    groq_client = Groq(api_key=GROQ_API_KEY)
-    JUDGE_PROVIDER = _secret_first("JUDGE_PROVIDER", default="openai").lower()
-    JUDGE_MODEL = _secret_first("JUDGE_MODEL", default="gpt-4.1-mini")
-else:
-    raise ValueError("LLM_PROVIDER must be 'openai' or 'groq'.")
+groq_client = OpenAI(api_key=OPENAI_API_KEY)
+GROQ_MODEL = LLM_MODEL
+JUDGE_PROVIDER = "openai"
+JUDGE_MODEL = _secret_first("JUDGE_MODEL", default=LLM_MODEL)
 
 
-# Replace the starter wrapper with a provider-compatible, rate-limit-tolerant
+# Replace the starter wrapper with an OpenAI-compatible, rate-limit-tolerant
 # wrapper. Call signatures stay identical, so coref / extraction / retrieval /
 # answer generation do not need changes.
 def groq_chat(messages, model=None, json_mode=False, max_retries=8):
@@ -223,8 +210,8 @@ os.environ["EXTRACT_BATCH_SIZE"] = _secret_first("EXTRACT_BATCH_SIZE", default="
 
 
 # -----------------------------------------------------------------------------
-# Automatic fail-fast preflight. This is called by the one-click notebook before
-# any expensive coreference/extraction work.
+# Automatic fail-fast preflight. Called by the one-click notebook before any
+# expensive coreference/extraction work.
 # -----------------------------------------------------------------------------
 def preflight_services():
     from neo4j import GraphDatabase
@@ -244,15 +231,15 @@ def preflight_services():
         test_driver.close()
     print("[preflight] Neo4j OK")
 
-    print("[preflight] LLM...")
+    print("[preflight] OpenAI...")
     text, _ = groq_chat(
         [{"role": "user", "content": "Reply exactly: OK"}],
         model=GROQ_MODEL,
         max_retries=3,
     )
     if not text.strip().upper().startswith("OK"):
-        raise RuntimeError(f"LLM preflight returned unexpected text: {text[:120]!r}")
-    print("[preflight] LLM OK")
+        raise RuntimeError(f"OpenAI preflight returned unexpected text: {text[:120]!r}")
+    print("[preflight] OpenAI OK")
 
 
 print("=" * 72)
