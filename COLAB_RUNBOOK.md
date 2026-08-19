@@ -1,108 +1,108 @@
-# Lab 19 — Colab Runbook
+# Lab 19 — Colab Runbook (OpenAI + Official Golden 50)
 
-Branch prepared by AI helper: `agent/lab19-colab-ready`.
+The easiest path is now the ready-to-run notebook:
 
-The original notebook already contains nearly all implementation functions, but the execution calls are commented out and the Golden Dataset/report are incomplete. `colab_solution.py` turns the notebook into a reproducible end-to-end run without inventing empirical metrics.
+`Day19_OpenAI_Colab_Run.ipynb`
 
-## 1. Open the notebook in Google Colab
+It keeps the instructor reference notebook untouched, executes its definition cells in the same Colab runtime, patches the LLM backend to OpenAI, runs the full solution, then runs the official 50-question Golden benchmark from the first 5,000 source rows.
 
-Open `Day19_GraphRAG_vs_FlatRAG_Production_Lab_Guide.ipynb` from this branch in Colab. T4 GPU is recommended but the embedding model/FAISS pipeline can also run on CPU.
+## 1. Required Colab Secrets
 
-## 2. Add Colab Secrets
+Add these in the Colab Secrets panel:
 
-Required:
-
+- `OPENAI_API_KEY`
+- `HF_TOKEN`
 - `NEO4J_URI`
 - `NEO4J_USER` = `neo4j`
 - `NEO4J_PASSWORD`
 - `NEO4J_DATABASE` = `neo4j`
-- `HF_TOKEN`
-- `GROQ_API_KEY`
-- `GROQ_MODEL` = `llama-3.3-70b-versatile` (or another currently available Groq chat model)
-- `JUDGE_PROVIDER` = `groq` or `openai`
-- `JUDGE_MODEL`
-- `OPENAI_API_KEY` only when `JUDGE_PROVIDER=openai`
 
 Optional:
 
-- `STUDENT_NAME` = `Lương Quốc Khánh`
-- `LAB_PROJECT_NAME` = project name used in the reflection
-- `COREF_BATCH_SIZE` = `8`
-- `EXTRACT_BATCH_SIZE` = `6`
-- `LAB_RESET_GRAPH` = `1` only when the Neo4j database is dedicated to this lab and it is safe to delete existing `:Entity` nodes. Otherwise keep `0`.
+- `LLM_PROVIDER` = `openai` (default)
+- `LLM_MODEL` = `gpt-4.1-mini` (default)
+- `JUDGE_PROVIDER` = `openai` (default)
+- `JUDGE_MODEL` = `gpt-4.1-mini` (default)
+- `LAB_MAX_ARTICLES` = `5000`
+- `LAB_MAX_CHUNKS` = `10000`
+- `EXTRACTION_MAX_CHUNKS` = `5000`
+- `COREF_BATCH_SIZE` = `12`
+- `EXTRACT_BATCH_SIZE` = `12`
+- `LAB_RESET_GRAPH` = `1` only if the Neo4j database is dedicated to this lab and it is safe to delete the existing graph.
 
-Never hard-code keys into the notebook.
+Never hard-code secrets in the notebook.
 
-## 3. Run the notebook definition cells
+## 2. Run the ready notebook
 
-Use **Runtime → Run all**. The reference notebook intentionally leaves the heavy pipeline calls commented, so this stage mainly installs dependencies, downloads the HackerNoon subset, and defines all required functions.
+Open `Day19_OpenAI_Colab_Run.ipynb` in Google Colab and run the cells from top to bottom.
 
-If the 300 MB streaming cell is too slow for the lab session, change the two variables in cell 1.3 before running:
+The notebook does four things:
+
+1. clones the latest `main` branch;
+2. executes the instructor notebook definitions while limiting the streamed corpus to the first 5,000 rows;
+3. runs `openai_runtime_patch.py` and `colab_solution.py`;
+4. runs `official_golden_eval.py` on `data/graphrag_golden_50_first5000.csv`.
+
+The OpenAI patch deliberately preserves the legacy names `groq_client`, `GROQ_MODEL`, `groq_chat`, and `groq_json`, because the reference notebook looks them up dynamically. Under the default configuration those wrappers actually call the OpenAI client.
+
+It also fixes the HackerNoon schema mismatch by accepting `description` as the article text column.
+
+## 3. If running inside the original notebook manually
+
+After all definition cells are loaded, run this cell:
 
 ```python
-LIMIT_ROWS = 30000
-LIMIT_MB = 80
-PRIORITIZE_MB = False
-```
+!wget -q "https://raw.githubusercontent.com/QuocKhanhLuong/K3-Track3-Lab19-GraphRAG-2A202601713-LuongQuocKhanh/main/openai_runtime_patch.py" -O /content/openai_runtime_patch.py
+!wget -q "https://raw.githubusercontent.com/QuocKhanhLuong/K3-Track3-Lab19-GraphRAG-2A202601713-LuongQuocKhanh/main/colab_solution.py" -O /content/colab_solution.py
 
-The later `LAB_MAX_ARTICLES=1500` and `LAB_MAX_CHUNKS=3000` guards still bound the actual processing workload.
-
-## 4. Add ONE final Colab cell
-
-```python
-!wget -q "https://raw.githubusercontent.com/QuocKhanhLuong/K3-Track3-Lab19-GraphRAG-2A202601713-LuongQuocKhanh/agent/lab19-colab-ready/colab_solution.py" -O /content/colab_solution.py
+%run -i /content/openai_runtime_patch.py
 %run -i /content/colab_solution.py
 ```
 
-The runner will:
+Then run the official Golden-50 cell:
 
-1. load → exact-dedup → chunk the dataset;
-2. run conservative coreference resolution;
-3. run schema-constrained NER/RE;
-4. run Entity Resolution with cosine threshold `0.90`, lexical guard, Union-Find, and audit logging;
-5. bulk-ingest nodes/edges into Neo4j using the notebook's `UNWIND` functions;
-6. assert `invalid_provenance_edges == 0`;
-7. build Flat RAG + Hybrid GraphRAG;
-8. construct a 5-question data-grounded Golden Dataset with `factoid`, `multi-hop`, and `cross-doc` groups from extracted evidence;
-9. run LLM-as-a-Judge on both methods;
-10. run super-node checks and the existing community/self-correction bonus scaffolds when possible;
-11. generate the required CSVs and reports from actual metrics;
-12. download `/content/lab19_submission.zip`.
+```python
+!wget -q "https://raw.githubusercontent.com/QuocKhanhLuong/K3-Track3-Lab19-GraphRAG-2A202601713-LuongQuocKhanh/main/official_golden_eval.py" -O /content/official_golden_eval.py
 
-## 5. What is inside the ZIP
+%run -i /content/official_golden_eval.py
+```
+
+Do not restart the runtime between the solution cell and the Golden-50 cell: the evaluation reuses the in-memory FAISS index, entity matcher, retrieval functions, and the Neo4j graph built by the solution.
+
+## 4. Output
+
+The baseline runner writes `/content/lab19_submission/`.
+
+The official evaluation makes the official 50-question dataset the canonical submission Golden set and overwrites the two rubric CSVs with the official benchmark results:
 
 ```text
 lab19_submission/
 ├── data/
-│   └── golden_dataset.csv
+│   ├── golden_dataset.csv
+│   └── graphrag_golden_50_first5000.csv
 ├── outputs/
 │   ├── graphrag_eval_results.csv
 │   ├── graphrag_vs_flatrag_summary.csv
+│   ├── graphrag_eval_results_official50.csv
+│   ├── graphrag_vs_flatrag_summary_official50.csv
 │   ├── entity_resolution_audit.csv
 │   ├── guard_probe_audit.csv
 │   ├── top_degree_entities.csv
 │   └── extraction_errors.csv
 └── reports/
     ├── lab_report.md
+    ├── official_golden_50.md
     ├── technical_defense.md
     ├── failure_analysis.md
     └── reflection_LuongQuocKhanh.md
 ```
 
-`lab_report.md` is the single-file format described by README/ASSIGNMENT. The three split report files are generated as well because `RUBRIC.md` also names them explicitly. Keeping both formats avoids losing procedural points because the starter materials are inconsistent about report layout.
+The final Golden cell also downloads:
 
-## 6. Final submission steps
+`/content/lab19_submission_official50.zip`
 
-1. Inspect `data/golden_dataset.csv` and spot-check the 5 reference answers/evidence against the cited chunks. The runner deliberately derives them from real extracted provenance rather than fabricating answers.
-2. Inspect `outputs/extraction_errors.csv`. A few retry/rate-limit errors can be acceptable if enough triples remain, but a large failure rate should be rerun.
-3. Confirm `outputs/entity_resolution_audit.csv` has useful audit rows and inspect `guard_probe_audit.csv` for false-merge protection examples.
-4. In Colab choose **File → Save a copy in GitHub** so the submitted notebook contains execution outputs.
-5. Add the generated `data/`, `outputs/`, and `reports/` files to the repository and commit them.
+## 5. Before submission
 
-## Expected defense points
+Check that `outputs/extraction_errors.csv` does not show a systematic API failure, inspect a few rows in the official Golden results, and confirm the Neo4j provenance check passed with `invalid_provenance_edges == 0`.
 
-- Flat RAG is the cheaper/faster baseline and often wins on simple factoids.
-- GraphRAG should be strongest when the answer requires explicit A → B → C reasoning across chunks.
-- False coreference and false entity merges are more dangerous than a retrieval miss because they create confident but structurally wrong graph evidence.
-- Super-node pruning controls token/context explosion but creates recency bias; production ranking should combine relation relevance, confidence, time, and query intent.
-- The rejected AI-agent approach is all-pairs `O(N²)` entity similarity/near-dedup; the lab uses ANN candidates + guards instead.
+Then save the executed Colab notebook to GitHub and commit the generated `data/`, `outputs/`, and `reports/` artifacts.
