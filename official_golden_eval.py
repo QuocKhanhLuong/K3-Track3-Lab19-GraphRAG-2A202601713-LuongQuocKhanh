@@ -2,7 +2,7 @@
 
 This script is intentionally strict: it only runs after colab_solution.py has
 successfully built the Flat FAISS index, entity matcher and Neo4j graph in the
-same runtime. It never tries to create a second Neo4j connection from secrets.
+same runtime. It never creates a second Neo4j connection from secrets.
 """
 
 from pathlib import Path
@@ -33,12 +33,20 @@ if globals().get("flat_index") is None:
 if int(getattr(flat_index, "ntotal", 0) or 0) <= 0:
     raise RuntimeError("Flat FAISS index is empty; refusing to run Golden 50.")
 
-if globals().get("entity_match_index") is None:
+# The reference notebook's entity matcher is a normalized NumPy matrix + store,
+# not a second FAISS index.
+entity_vectors = globals().get("entity_match_vectors")
+entity_store = globals().get("entity_match_store")
+if entity_vectors is None or entity_store is None:
     raise RuntimeError(
         "Entity matcher is not built. colab_solution.py did not finish indexing."
     )
-if int(getattr(entity_match_index, "ntotal", 0) or 0) <= 0:
+if len(entity_vectors) <= 0 or len(entity_store) <= 0:
     raise RuntimeError("Entity matcher is empty; refusing to run Golden 50.")
+if len(entity_vectors) != len(entity_store):
+    raise RuntimeError(
+        "Entity matcher vectors/store length mismatch; refusing to run Golden 50."
+    )
 
 try:
     neo4j_probe = run_cypher("RETURN 1 AS ok")
@@ -52,7 +60,7 @@ except Exception as exc:
 
 print(
     f"Runtime ready: flat_index={flat_index.ntotal:,} vectors | "
-    f"entity_index={entity_match_index.ntotal:,} entities | Neo4j=OK"
+    f"entity_matcher={len(entity_store):,} entities | Neo4j=OK"
 )
 
 
