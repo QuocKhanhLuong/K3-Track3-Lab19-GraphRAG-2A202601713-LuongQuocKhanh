@@ -1,0 +1,4 @@
+type,left,right,similarity,decision,source
+Company,Apple,Apple Watch,0.6094788312911987,REJECT_GUARD,guard_probe_only
+Person,Sam Altman,Steve Altman,0.8242135047912598,MERGE_VECTOR,guard_probe_only
+Company,Microsoft,Microsoft Research,0.7075937390327454,REJECT_GUARD,guard_probe_only
