@@ -18,7 +18,6 @@ venv/
 env/
 
 # Large Datasets and data dumps (do not commit 300MB data dumps)
-*.csv
 golden_dataset.csv
 !reports/*.csv
 *.jsonl
