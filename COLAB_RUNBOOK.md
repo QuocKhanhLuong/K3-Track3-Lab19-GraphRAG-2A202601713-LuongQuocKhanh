@@ -1,79 +1,70 @@
-# Lab 19 — Colab Runbook (OpenAI + Official Golden 50)
+# Lab 19 — One-click Colab Runbook
 
-The easiest path is now the ready-to-run notebook:
+Use only:
 
 `Day19_OpenAI_Colab_Run.ipynb`
 
-It keeps the instructor reference notebook untouched, executes its definition cells in the same Colab runtime, patches the LLM backend to OpenAI, runs the full solution, then runs the official 50-question Golden benchmark from the first 5,000 source rows.
+The intended workflow is now:
 
-## 1. Required Colab Secrets
+**fresh Colab runtime → add Secrets → Runtime > Run all → wait for the final ZIP**
 
-Add these in the Colab Secrets panel:
+No manual smoke-test cell, resume cell, Neo4j patch cell, or separate Golden cell is required.
+
+## Required Colab Secrets
+
+Add exactly the values from the Neo4j Aura credential download and your API accounts:
 
 - `OPENAI_API_KEY`
 - `HF_TOKEN`
 - `NEO4J_URI`
-- `NEO4J_USER` = `neo4j`
+- `NEO4J_USERNAME` **or** `NEO4J_USER`
 - `NEO4J_PASSWORD`
-- `NEO4J_DATABASE` = `neo4j`
+- `NEO4J_DATABASE`
 
-Optional:
+Aura credential downloads commonly use `NEO4J_USERNAME`. The runtime supports both names and maps them to the starter notebook's `NEO4J_USER` variable automatically.
 
-- `LLM_PROVIDER` = `openai` (default)
-- `LLM_MODEL` = `gpt-4.1-mini` (default)
-- `JUDGE_PROVIDER` = `openai` (default)
-- `JUDGE_MODEL` = `gpt-4.1-mini` (default)
-- `LAB_MAX_ARTICLES` = `5000`
-- `LAB_MAX_CHUNKS` = `10000`
-- `EXTRACTION_MAX_CHUNKS` = `5000`
-- `COREF_BATCH_SIZE` = `12`
-- `EXTRACT_BATCH_SIZE` = `12`
-- `LAB_RESET_GRAPH` = `1` only if the Neo4j database is dedicated to this lab and it is safe to delete the existing graph.
+For each Colab Secret, paste only the value. Example:
 
-Never hard-code secrets in the notebook.
-
-## 2. Run the ready notebook
-
-Open `Day19_OpenAI_Colab_Run.ipynb` in Google Colab and run the cells from top to bottom.
-
-The notebook does four things:
-
-1. clones the latest `main` branch;
-2. executes the instructor notebook definitions while limiting the streamed corpus to the first 5,000 rows;
-3. runs `openai_runtime_patch.py` and `colab_solution.py`;
-4. runs `official_golden_eval.py` on `data/graphrag_golden_50_first5000.csv`.
-
-The OpenAI patch deliberately preserves the legacy names `groq_client`, `GROQ_MODEL`, `groq_chat`, and `groq_json`, because the reference notebook looks them up dynamically. Under the default configuration those wrappers actually call the OpenAI client.
-
-It also fixes the HackerNoon schema mismatch by accepting `description` as the article text column.
-
-## 3. If running inside the original notebook manually
-
-After all definition cells are loaded, run this cell:
-
-```python
-!wget -q "https://raw.githubusercontent.com/QuocKhanhLuong/K3-Track3-Lab19-GraphRAG-2A202601713-LuongQuocKhanh/main/openai_runtime_patch.py" -O /content/openai_runtime_patch.py
-!wget -q "https://raw.githubusercontent.com/QuocKhanhLuong/K3-Track3-Lab19-GraphRAG-2A202601713-LuongQuocKhanh/main/colab_solution.py" -O /content/colab_solution.py
-
-%run -i /content/openai_runtime_patch.py
-%run -i /content/colab_solution.py
+```text
+NEO4J_URI    -> neo4j+s://<instance>.databases.neo4j.io
+NEO4J_USERNAME -> <username from Aura file>
 ```
 
-Then run the official Golden-50 cell:
+Do not paste the literal `NEO4J_URI=` prefix into the value. The runtime patch can normalize `KEY=value` as a safety fallback, but plain values are preferred.
 
-```python
-!wget -q "https://raw.githubusercontent.com/QuocKhanhLuong/K3-Track3-Lab19-GraphRAG-2A202601713-LuongQuocKhanh/main/official_golden_eval.py" -O /content/official_golden_eval.py
+Optional settings:
 
-%run -i /content/official_golden_eval.py
-```
+- `LLM_PROVIDER=openai` (default)
+- `LLM_MODEL=gpt-4.1-mini` (default)
+- `JUDGE_PROVIDER=openai` (default)
+- `JUDGE_MODEL=gpt-4.1-mini` (default)
+- `LAB_MAX_ARTICLES=5000` (default)
+- `LAB_MAX_CHUNKS=12000` (default)
+- `EXTRACTION_MAX_CHUNKS=12000` (default; extracts every retained first-5000 chunk)
+- `COREF_BATCH_SIZE=16` (default)
+- `EXTRACT_BATCH_SIZE=16` (default)
+- `LAB_RESET_GRAPH=1` only when the Aura database is dedicated to this lab and deleting existing `:Entity` nodes is safe.
 
-Do not restart the runtime between the solution cell and the Golden-50 cell: the evaluation reuses the in-memory FAISS index, entity matcher, retrieval functions, and the Neo4j graph built by the solution.
+Never hard-code secrets in the notebook or commit them to GitHub.
 
-## 4. Output
+## What Run all does
 
-The baseline runner writes `/content/lab19_submission/`.
+1. Safely `cd /content`, removes any stale `/content/lab19`, and clones the latest `main`.
+2. Loads the instructor notebook definitions and streams the official first 5,000 HackerNoon source rows.
+3. Applies `openai_runtime_patch.py`:
+   - accepts both `NEO4J_USERNAME` and `NEO4J_USER`;
+   - validates the Neo4j URI shape;
+   - fixes HackerNoon `description` as the article-text column;
+   - switches the legacy Groq wrappers to OpenAI by default;
+   - adds exponential retry for LLM requests;
+   - expands extraction to all retained chunks from the first-5000 corpus.
+4. Automatically preflights Neo4j Aura and OpenAI **before** expensive coreference/extraction starts.
+5. Runs `colab_solution.py` end-to-end and builds the Neo4j graph, Flat FAISS index, entity matcher, artifacts and reports.
+6. Only if the full solution succeeds, runs `official_golden_eval.py` on the official 50-question Golden set.
+7. The official evaluator checks that FAISS, the entity matcher and Neo4j are actually ready before evaluating.
+8. Downloads `/content/lab19_submission_official50.zip`.
 
-The official evaluation makes the official 50-question dataset the canonical submission Golden set and overwrites the two rubric CSVs with the official benchmark results:
+## Final output
 
 ```text
 lab19_submission/
@@ -97,12 +88,4 @@ lab19_submission/
     └── reflection_LuongQuocKhanh.md
 ```
 
-The final Golden cell also downloads:
-
-`/content/lab19_submission_official50.zip`
-
-## 5. Before submission
-
-Check that `outputs/extraction_errors.csv` does not show a systematic API failure, inspect a few rows in the official Golden results, and confirm the Neo4j provenance check passed with `invalid_provenance_edges == 0`.
-
-Then save the executed Colab notebook to GitHub and commit the generated `data/`, `outputs/`, and `reports/` artifacts.
+The canonical rubric CSVs are generated from the official 50-question benchmark, not the five-question internal smoke benchmark.
