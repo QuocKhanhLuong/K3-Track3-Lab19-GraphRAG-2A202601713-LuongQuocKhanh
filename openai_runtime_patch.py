@@ -20,6 +20,36 @@ def _require_global(name):
 
 _require_global("get_secret")
 
+# -----------------------------------------------------------------------------
+# Reload Neo4j credentials from Colab Secrets.
+# Aura credential downloads use NEO4J_USERNAME, while the starter notebook used
+# NEO4J_USER. Support both names and prefer NEO4J_USER only when it actually
+# exists. This also refreshes stale globals after the user edits Colab Secrets.
+# -----------------------------------------------------------------------------
+NEO4J_URI = str(get_secret("NEO4J_URI", "") or "").strip()
+NEO4J_USER = str(
+    get_secret("NEO4J_USER", "")
+    or get_secret("NEO4J_USERNAME", "")
+    or ""
+).strip()
+NEO4J_PASSWORD = str(get_secret("NEO4J_PASSWORD", "") or "").strip()
+NEO4J_DATABASE = str(get_secret("NEO4J_DATABASE", "") or "").strip()
+
+_missing_neo4j = [
+    name
+    for name, value in {
+        "NEO4J_URI": NEO4J_URI,
+        "NEO4J_USER/NEO4J_USERNAME": NEO4J_USER,
+        "NEO4J_PASSWORD": NEO4J_PASSWORD,
+        "NEO4J_DATABASE": NEO4J_DATABASE,
+    }.items()
+    if not value
+]
+if _missing_neo4j:
+    raise RuntimeError(
+        "Missing Neo4j Colab Secrets: " + ", ".join(_missing_neo4j)
+    )
+
 LLM_PROVIDER = str(get_secret("LLM_PROVIDER", "openai") or "openai").strip().lower()
 LLM_MODEL = str(get_secret("LLM_MODEL", "gpt-4.1-mini") or "gpt-4.1-mini").strip()
 
@@ -100,6 +130,9 @@ print("Lab 19 runtime patch active")
 print(f"LLM provider        : {LLM_PROVIDER}")
 print(f"Pipeline model      : {GROQ_MODEL}")
 print(f"Judge               : {JUDGE_PROVIDER} / {JUDGE_MODEL}")
+print(f"Neo4j URI loaded    : {bool(NEO4J_URI)}")
+print(f"Neo4j user          : {NEO4J_USER}")
+print(f"Neo4j database      : {NEO4J_DATABASE}")
 print(f"LAB_MAX_ARTICLES    : {LAB_MAX_ARTICLES}")
 print(f"LAB_MAX_CHUNKS      : {LAB_MAX_CHUNKS}")
 print(f"EXTRACTION_MAX_CHUNKS: {EXTRACTION_MAX_CHUNKS}")
