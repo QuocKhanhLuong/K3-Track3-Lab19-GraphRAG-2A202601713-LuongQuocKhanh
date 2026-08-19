@@ -43,12 +43,12 @@ def _secret_first(*names, default=""):
 
 # -----------------------------------------------------------------------------
 # Neo4j Aura credentials
-# Aura credential downloads may use NEO4J_USERNAME while the starter notebook
-# uses NEO4J_USER. Support both and expose both globals so every notebook cell
-# sees the same value.
+# Aura credential downloads use NEO4J_USERNAME while the starter notebook used
+# NEO4J_USER. Prefer the official Aura name when both happen to exist, then
+# expose both globals so every notebook cell sees the same value.
 # -----------------------------------------------------------------------------
 NEO4J_URI = _secret_first("NEO4J_URI")
-NEO4J_USER = _secret_first("NEO4J_USER", "NEO4J_USERNAME")
+NEO4J_USER = _secret_first("NEO4J_USERNAME", "NEO4J_USER")
 NEO4J_USERNAME = NEO4J_USER
 NEO4J_PASSWORD = _secret_first("NEO4J_PASSWORD")
 NEO4J_DATABASE = _secret_first("NEO4J_DATABASE", default="neo4j")
@@ -66,7 +66,7 @@ _missing_neo4j = [
     name
     for name, value in {
         "NEO4J_URI": NEO4J_URI,
-        "NEO4J_USER or NEO4J_USERNAME": NEO4J_USER,
+        "NEO4J_USERNAME or NEO4J_USER": NEO4J_USER,
         "NEO4J_PASSWORD": NEO4J_PASSWORD,
         "NEO4J_DATABASE": NEO4J_DATABASE,
     }.items()
