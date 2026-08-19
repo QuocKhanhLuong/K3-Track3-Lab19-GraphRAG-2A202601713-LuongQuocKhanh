@@ -9,6 +9,7 @@ unchanged while using OpenAI end-to-end.
 import json
 import os
 import random
+import re
 import time
 
 
@@ -22,23 +23,64 @@ def _require_global(name):
 _require_global("get_secret")
 
 
-def _clean_secret(value, *keys):
-    """Normalize values copied either directly or as KEY=value from credential files."""
-    value = str(value or "").strip().strip('"').strip("'").strip()
-    for key in keys:
-        prefix = f"{key}="
-        if value.startswith(prefix):
-            value = value[len(prefix):].strip().strip('"').strip("'").strip()
-    return value
+def _strip_wrapping(value):
+    value = str(value or "").replace("\ufeff", "").strip()
+    value = value.replace("```bash", "").replace("```env", "").replace("```", "").strip()
+    return value.strip().strip('"').strip("'").strip()
+
+
+def _extract_named_value(raw_value, key):
+    """Accept plain VALUE, `KEY=VALUE`, `KEY = VALUE`, or a full Aura credential block."""
+    raw = _strip_wrapping(raw_value)
+    if not raw:
+        return ""
+
+    # If the secret contains one or more KEY=value lines, extract the requested key.
+    match = re.search(
+        rf"(?mi)^\s*{re.escape(key)}\s*=\s*([^\r\n#]+?)\s*$",
+        raw,
+    )
+    if match:
+        return _strip_wrapping(match.group(1))
+
+    # Also tolerate a single-line `KEY = VALUE` value without a final newline.
+    match = re.match(rf"(?i)^\s*{re.escape(key)}\s*=\s*(.+?)\s*$", raw)
+    if match:
+        return _strip_wrapping(match.group(1))
+
+    # Otherwise treat the secret as the value itself.
+    return raw
 
 
 def _secret_first(*names, default=""):
     for name in names:
-        value = get_secret(name, "")
-        value = _clean_secret(value, name)
+        raw = get_secret(name, "")
+        value = _extract_named_value(raw, name)
         if value:
             return value
     return default
+
+
+def _normalize_neo4j_uri(value):
+    """Extract/normalize a Neo4j URI from common Colab/Aura copy-paste formats."""
+    raw = _strip_wrapping(value)
+    if not raw:
+        return ""
+
+    # Prefer an explicit URI found anywhere in the value/block.
+    match = re.search(
+        r"(?i)((?:neo4j|bolt)(?:\+s|\+ssc)?://[^\s'\"`]+)",
+        raw,
+    )
+    if match:
+        return match.group(1).rstrip(",;")
+
+    # Aura host copied without a scheme -> use the secure routed Neo4j scheme.
+    match = re.search(r"(?i)([a-z0-9-]+\.databases\.neo4j\.io)", raw)
+    if match:
+        return "neo4j+s://" + match.group(1)
+
+    return raw
 
 
 # -----------------------------------------------------------------------------
@@ -47,7 +89,7 @@ def _secret_first(*names, default=""):
 # NEO4J_USER. Prefer the official Aura name when both happen to exist, then
 # expose both globals so every notebook cell sees the same value.
 # -----------------------------------------------------------------------------
-NEO4J_URI = _secret_first("NEO4J_URI")
+NEO4J_URI = _normalize_neo4j_uri(_secret_first("NEO4J_URI"))
 NEO4J_USER = _secret_first("NEO4J_USERNAME", "NEO4J_USER")
 NEO4J_USERNAME = NEO4J_USER
 NEO4J_PASSWORD = _secret_first("NEO4J_PASSWORD")
@@ -76,10 +118,11 @@ if _missing_neo4j:
     raise RuntimeError(
         "Missing Neo4j Colab Secrets: " + ", ".join(_missing_neo4j)
     )
-if not NEO4J_URI.startswith(_supported_neo4j_schemes):
+if not NEO4J_URI.lower().startswith(_supported_neo4j_schemes):
     raise RuntimeError(
-        "NEO4J_URI is malformed. Put only the URI value in the Colab Secret, "
-        "for example neo4j+s://<instance>.databases.neo4j.io."
+        "Could not parse NEO4J_URI from the Colab Secret. Supported inputs: "
+        "`neo4j+s://...`, `NEO4J_URI=neo4j+s://...`, a full Aura credential block, "
+        "or an Aura hostname ending in `.databases.neo4j.io`."
     )
 
 
