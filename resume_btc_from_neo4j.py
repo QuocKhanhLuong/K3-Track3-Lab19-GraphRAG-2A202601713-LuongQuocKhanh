@@ -1,7 +1,7 @@
 """Resume Lab 19 from Neo4j connection without repeating extraction/coreference.
 
 Use in the SAME Colab runtime after [4/8] entity resolution completed and Neo4j auth failed.
-Before running, fix NEO4J_* Colab secrets.
+Before running, update the Colab secrets with the NEW Aura instance credentials.
 """
 
 from pathlib import Path
@@ -20,8 +20,11 @@ if _missing:
     )
 
 # Reload current Colab secrets into the already-defined BTC notebook globals.
+# Aura's downloaded credential file uses NEO4J_USERNAME, while the BTC notebook
+# expects NEO4J_USER. Prefer the fresh Aura name and only fall back to BTC's alias.
 NEO4J_URI = get_secret("NEO4J_URI", "")
-NEO4J_USER = get_secret("NEO4J_USER", "neo4j")
+NEO4J_USERNAME = get_secret("NEO4J_USERNAME", "")
+NEO4J_USER = NEO4J_USERNAME or get_secret("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = get_secret("NEO4J_PASSWORD", "")
 NEO4J_DATABASE = get_secret("NEO4J_DATABASE", "neo4j")
 
@@ -34,7 +37,12 @@ driver = None
 
 print("[resume] Reusing completed [4/8] state:")
 print(f"         triples={len(triples_df):,} | nodes={len(nodes_df):,} | chunks={len(chunks_df):,}")
-print("[resume] Connecting to Neo4j with freshly reloaded Colab secrets...")
+print("[resume] Fresh Aura settings:")
+print(f"         uri={NEO4J_URI}")
+print(f"         user={NEO4J_USER}")
+print(f"         database={NEO4J_DATABASE}")
+print(f"         password_loaded={bool(NEO4J_PASSWORD)} (value hidden)")
+print("[resume] Connecting to Neo4j...")
 connect_neo4j()
 setup_graph_schema()
 
