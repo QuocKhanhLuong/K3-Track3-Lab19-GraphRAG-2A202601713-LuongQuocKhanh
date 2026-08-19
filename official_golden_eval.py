@@ -1,7 +1,8 @@
-"""Run the official first-5000 50-question Golden benchmark.
+"""Run the official first-5000 / 50-question Golden benchmark.
 
-Prerequisite: colab_solution.py has completed in the SAME Colab runtime so the
-Flat index, entity matcher, Neo4j graph and retrieval functions already exist.
+This script is intentionally strict: it only runs after colab_solution.py has
+successfully built the Flat FAISS index, entity matcher and Neo4j graph in the
+same runtime. It never tries to create a second Neo4j connection from secrets.
 """
 
 from pathlib import Path
@@ -10,11 +11,50 @@ import shutil
 import pandas as pd
 
 
-for required in ("run_evaluation", "comparison_table", "validate_golden"):
+# -----------------------------------------------------------------------------
+# Fail fast if the full solution did not finish.
+# -----------------------------------------------------------------------------
+for required in (
+    "run_evaluation",
+    "comparison_table",
+    "validate_golden",
+    "run_cypher",
+):
     if required not in globals():
         raise RuntimeError(
-            f"Missing `{required}`. Run colab_solution.py successfully first in this runtime."
+            f"Missing `{required}`. colab_solution.py must finish successfully "
+            "before the official Golden evaluation."
         )
+
+if globals().get("flat_index") is None:
+    raise RuntimeError(
+        "Flat FAISS index is not built. colab_solution.py did not reach [5/8]."
+    )
+if int(getattr(flat_index, "ntotal", 0) or 0) <= 0:
+    raise RuntimeError("Flat FAISS index is empty; refusing to run Golden 50.")
+
+if globals().get("entity_match_index") is None:
+    raise RuntimeError(
+        "Entity matcher is not built. colab_solution.py did not finish indexing."
+    )
+if int(getattr(entity_match_index, "ntotal", 0) or 0) <= 0:
+    raise RuntimeError("Entity matcher is empty; refusing to run Golden 50.")
+
+try:
+    neo4j_probe = run_cypher("RETURN 1 AS ok")
+    if not neo4j_probe or int(neo4j_probe[0].get("ok", 0)) != 1:
+        raise RuntimeError("Neo4j probe returned an unexpected result.")
+except Exception as exc:
+    raise RuntimeError(
+        "Neo4j graph is not available in this runtime. "
+        "colab_solution.py must finish successfully before Golden 50."
+    ) from exc
+
+print(
+    f"Runtime ready: flat_index={flat_index.ntotal:,} vectors | "
+    f"entity_index={entity_match_index.ntotal:,} entities | Neo4j=OK"
+)
+
 
 ROOT = Path("/content/lab19_submission")
 DATA_DIR = ROOT / "data"
@@ -76,7 +116,7 @@ comparison_df = comparison_table(eval_results_df)
 eval_results_df.to_csv(OUT_DIR / "graphrag_eval_results.csv", index=False)
 comparison_df.to_csv(OUT_DIR / "graphrag_vs_flatrag_summary.csv", index=False)
 
-# Keep explicit copies so the provenance of the final numbers is obvious.
+# Explicit copies make final-result provenance obvious.
 eval_results_df.to_csv(OUT_DIR / "graphrag_eval_results_official50.csv", index=False)
 comparison_df.to_csv(OUT_DIR / "graphrag_vs_flatrag_summary_official50.csv", index=False)
 
@@ -89,6 +129,7 @@ def _mean(column):
 
 def _fmt(value, digits=3):
     return "N/A" if pd.isna(value) else f"{value:.{digits}f}"
+
 
 flat_comp = _mean("flat_comprehensiveness")
 graph_comp = _mean("graph_comprehensiveness")
@@ -117,8 +158,8 @@ summary_md = f"""# Official Golden-50 Evaluation
 | Mean total tokens | {_fmt(flat_tokens, 1)} | {_fmt(graph_tokens, 1)} | {_fmt(graph_tokens-flat_tokens, 1)} |
 
 The canonical submission CSVs in `outputs/` are generated from this official
-50-question benchmark. The earlier five-question data-grounded smoke benchmark
-from `colab_solution.py` is only a pipeline sanity check.
+50-question benchmark. The earlier five-question data-grounded benchmark from
+`colab_solution.py` is only a pipeline sanity check.
 """
 
 (REPORT_DIR / "official_golden_50.md").write_text(summary_md, encoding="utf-8")
@@ -157,7 +198,6 @@ print("\nZIP:", zip_path)
 
 try:
     from google.colab import files
-
     files.download(str(zip_path))
 except Exception:
     pass
