@@ -4,7 +4,7 @@ Use only:
 
 `Day19_OpenAI_Colab_Run.ipynb`
 
-The intended workflow is now:
+The intended workflow is:
 
 **fresh Colab runtime → add Secrets → Runtime > Run all → wait for the final ZIP**
 
@@ -12,7 +12,7 @@ No manual smoke-test cell, resume cell, Neo4j patch cell, or separate Golden cel
 
 ## Required Colab Secrets
 
-Add exactly the values from the Neo4j Aura credential download and your API accounts:
+Add:
 
 - `OPENAI_API_KEY`
 - `HF_TOKEN`
@@ -23,20 +23,19 @@ Add exactly the values from the Neo4j Aura credential download and your API acco
 
 Aura credential downloads commonly use `NEO4J_USERNAME`. The runtime supports both names and maps them to the starter notebook's `NEO4J_USER` variable automatically.
 
-For each Colab Secret, paste only the value. Example:
+The one-click parser is intentionally tolerant. For Neo4j values it accepts:
 
-```text
-NEO4J_URI    -> neo4j+s://<instance>.databases.neo4j.io
-NEO4J_USERNAME -> <username from Aura file>
-```
+- a plain value such as `neo4j+s://<instance>.databases.neo4j.io`;
+- `KEY=value`;
+- `KEY = value`;
+- an Aura hostname without a scheme;
+- or a full credential block copied from the Aura download.
 
-Do not paste the literal `NEO4J_URI=` prefix into the value. The runtime patch can normalize `KEY=value` as a safety fallback, but plain values are preferred.
+So existing Colab Secrets do not need to be reformatted just to satisfy the runner.
 
 Optional settings:
 
-- `LLM_PROVIDER=openai` (default)
 - `LLM_MODEL=gpt-4.1-mini` (default)
-- `JUDGE_PROVIDER=openai` (default)
 - `JUDGE_MODEL=gpt-4.1-mini` (default)
 - `LAB_MAX_ARTICLES=5000` (default)
 - `LAB_MAX_CHUNKS=12000` (default)
@@ -44,6 +43,8 @@ Optional settings:
 - `COREF_BATCH_SIZE=16` (default)
 - `EXTRACT_BATCH_SIZE=16` (default)
 - `LAB_RESET_GRAPH=1` only when the Aura database is dedicated to this lab and deleting existing `:Entity` nodes is safe.
+
+The one-click runner forces OpenAI for coreference, extraction, generation and judging; stale Groq/provider secrets are ignored.
 
 Never hard-code secrets in the notebook or commit them to GitHub.
 
@@ -53,9 +54,9 @@ Never hard-code secrets in the notebook or commit them to GitHub.
 2. Loads the instructor notebook definitions and streams the official first 5,000 HackerNoon source rows.
 3. Applies `openai_runtime_patch.py`:
    - accepts both `NEO4J_USERNAME` and `NEO4J_USER`;
-   - validates the Neo4j URI shape;
+   - normalizes common Aura URI copy/paste formats;
    - fixes HackerNoon `description` as the article-text column;
-   - switches the legacy Groq wrappers to OpenAI by default;
+   - forces the legacy Groq wrappers to OpenAI;
    - adds exponential retry for LLM requests;
    - expands extraction to all retained chunks from the first-5000 corpus.
 4. Automatically preflights Neo4j Aura and OpenAI **before** expensive coreference/extraction starts.
@@ -63,6 +64,8 @@ Never hard-code secrets in the notebook or commit them to GitHub.
 6. Only if the full solution succeeds, runs `official_golden_eval.py` on the official 50-question Golden set.
 7. The official evaluator checks that FAISS, the entity matcher and Neo4j are actually ready before evaluating.
 8. Downloads `/content/lab19_submission_official50.zip`.
+
+All Python runner files in the final execution cell are loaded with `exec(compile(...))`. Therefore a failed patch/preflight stops that cell immediately; it cannot continue into the solution or Golden benchmark with partial stale state.
 
 ## Final output
 
