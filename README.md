@@ -1,162 +1,214 @@
 # Lab 19: Production-Grade GraphRAG vs Flat RAG
 
 **AICB-K34 · Ngày 19 · Track 3: GraphRAG**  
-**Thời lượng:** 2h implement + 30 phút reflection & thuyết minh kỹ thuật  
-**Môi trường:** Google Colab (T4 GPU khuyến nghị) / Jupyter Notebook + Neo4j AuraDB  
-**Dữ liệu:** HackerNoon Tech Company News Data Dump (`HackerNoon/tech-company-news-data-dump`)  
-**Công cụ:** Học viên được dùng AI Coding Agent, nhưng phải tự thiết kế, kiểm thử, audit dữ liệu và bảo vệ kiến trúc.
+**Môi trường:** Google Colab + Neo4j AuraDB  
+**Dữ liệu:** HackerNoon Tech Company News Data Dump (`HackerNoon/tech-company-news-data-dump`)
 
----
+Repo này giữ nguyên notebook reference của đề và bổ sung một runner Colab để chạy end-to-end bằng OpenAI + Neo4j Aura + official Golden 50.
 
-## 🎯 Tổng quan
+## Mục tiêu
 
-Bài tập lab toàn diện so sánh **Flat RAG (Vector Search)** với **Production GraphRAG (Knowledge Graph + Hybrid Retrieval)**:
+Pipeline so sánh:
 
-```
-Stream Dataset → Dedup & Chunking → Coreference Resolution
-                                           │
-   ┌───────────────────────────────────────┴───────────────────────────────────────┐
-   ▼                                                                               ▼
-[Flat RAG Index]                                                           [NER + RE Extraction]
-Vector Embeddings + FAISS FlatIP                                                   │
-   │                                                                               ▼
-   │                                                                      [Entity Resolution]
-   │                                                                   Vector ANN + Lexical Guard
-   │                                                                               │
-   │                                                                               ▼
-   │                                                                    [Neo4j Bulk Insert]
-   │                                                                   UNWIND + Edge Provenance
-   │                                                                               │
-   │                                                                               ▼
-   │                                                                      [Graph Traversal]
-   │                                                                  BFS + Super-node Mitigation
-   │                                                                               │
-   └───────────────────────────────────────┬───────────────────────────────────────┘
-                                           ▼
-                            [Hybrid Context & Generation]
-                                           ▼
-                        [Golden Evaluation & LLM-as-a-Judge]
-                    (Factoid · Multi-hop · Cross-doc Reasoning)
+```text
+HackerNoon first 5,000 rows
+        ↓
+Dedup + Chunking
+        ↓
+Conservative Coreference
+        ↓
+NER + Relation Extraction
+        ↓
+Entity Resolution
+        ↓
+Neo4j Knowledge Graph ─────┐
+                           ├─→ GraphRAG / Hybrid Retrieval
+FAISS Flat Index ──────────┘
+        ↓
+Official Golden 50
+        ↓
+LLM-as-a-Judge + latency + token usage
 ```
 
-Xem **[ASSIGNMENT.md](ASSIGNMENT.md)** để biết chi tiết từng module, yêu cầu kỹ thuật và 10 câu hỏi thuyết minh.  
-Xem **[RUBRIC.md](RUBRIC.md)** để biết tiêu chí đánh giá và thang điểm (100 điểm + 10 bonus).
+Xem `ASSIGNMENT.md` cho yêu cầu module và `RUBRIC.md` cho thang điểm.
 
 ---
 
-## 📋 Prerequisites
+## Quick Start — cách duy nhất khuyến nghị
 
-| Dependency | Bắt buộc? | Dùng cho |
-|-----------|-----------|----------|
-| **Neo4j AuraDB** (hoặc Neo4j 5.x) | ✅ Có | Lưu trữ Knowledge Graph & Cypher traversal |
-| **Python 3.10+ / Colab** | ✅ Có | Môi trường thực thi Notebook |
-| `HF_TOKEN` | ✅ Có | Stream dataset từ Hugging Face (`HackerNoon`) |
-| `GROQ_API_KEY` | ✅ Có | Coreference, NER+RE Extraction, Seed Extraction, Generator |
-| `OPENAI_API_KEY` | ⚠️ Có thể thay thế | LLM-as-a-Judge (có thể cấu hình dùng Groq hoặc OpenAI) |
+Mở:
 
-### Cấu hình Secrets (Colab Secrets hoặc `.env`)
+`Day19_OpenAI_Colab_Run.ipynb`
 
-Khai báo các biến môi trường sau:
+trên Google Colab, thêm Secrets rồi chọn:
 
-```bash
-NEO4J_URI=neo4j+s://<your-instance>.databases.neo4j.io
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=<your-password>
-NEO4J_DATABASE=neo4j
+**Runtime → Run all**
 
-GROQ_API_KEY=gsk_...
-GROQ_MODEL=llama-3.3-70b-versatile
+Runner được thiết kế để chạy từ fresh runtime, không cần thêm cell test/resume thủ công.
 
-JUDGE_PROVIDER=openai               # 'openai' hoặc 'groq'
-JUDGE_MODEL=gpt-4o-mini             # hoặc llama-3.3-70b-versatile
-OPENAI_API_KEY=sk-...
+### Colab Secrets bắt buộc
 
-HF_TOKEN=hf_...                     # Hugging Face User Access Token
+```text
+OPENAI_API_KEY
+HF_TOKEN
+NEO4J_URI
+NEO4J_USERNAME   # hoặc NEO4J_USER
+NEO4J_PASSWORD
+NEO4J_DATABASE
 ```
 
-> [!WARNING]
-> **Tuyệt đối không hard-code API Key hoặc mật khẩu Neo4j** vào notebook khi nộp bài.
+Với Neo4j Aura, dùng đúng giá trị trong credential file tải khi tạo instance. Aura thường đặt tên username là `NEO4J_USERNAME`; runner tự map sang tên `NEO4J_USER` mà notebook reference dùng.
 
----
+Mỗi Secret chỉ nên chứa **value**, ví dụ:
 
-## ⚡ Quick Start
-
-### Cách 1: Chạy trực tiếp trên Google Colab (Khuyến nghị)
-1. Mở file [`Day19_GraphRAG_vs_FlatRAG_Production_Lab_Guide.ipynb`](Day19_GraphRAG_vs_FlatRAG_Production_Lab_Guide.ipynb) trên Google Colab.
-2. Thêm các secret keys vào tab **Secrets (biểu tượng chiếc khóa 🔑)** trên Colab.
-3. Chạy từng section theo Timeline hướng dẫn.
-
-### Cách 2: Chạy Local Notebook
-```bash
-# 1. Cài đặt dependencies
-pip install -r requirements.txt
-
-# 2. Pre-download embedding model
-python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
-
-# 3. Tạo file .env và điền API keys
-cp .env.example .env
-
-# 4. Khởi chạy Jupyter Lab / Notebook
-jupyter lab Day19_GraphRAG_vs_FlatRAG_Production_Lab_Guide.ipynb
+```text
+NEO4J_URI -> neo4j+s://<instance>.databases.neo4j.io
 ```
 
----
+Không commit API key/password vào repo.
 
-## ⏳ Timeline (120 phút + 30 phút Thuyết minh)
+### Optional
 
-| Thời gian | Module | Trọng tâm kỹ thuật |
-|-----------|--------|-------------------|
-| **0:00–0:15** | **Phần 1: Setup & Preprocessing** | Stream HF data, exact dedup, text chunking, conservative coreference resolution |
-| **0:15–0:45** | **Phần 2: Triple Extraction & Neo4j Ingestion** | NER + RE với JSON mode, schema allowlist, Entity Resolution (Vector ANN + Lexical Guard), bulk insert `UNWIND` |
-| **0:45–1:15** | **Phần 3: Flat RAG & Hybrid GraphRAG** | FAISS Flat RAG index, Seed extraction, BFS graph traversal, Super-node mitigation (degree > 100 → cap 50) |
-| **1:15–1:45** | **Phần 4: Golden Eval & Benchmark** | Chạy 5+ Golden queries, LLM-as-a-Judge (1–5 scale), bảng so sánh Quality / Latency / Tokens |
-| **1:45–2:00** | **Phần 5: Failure Modes & Bonus** | Super-node check, Entity audit log, Bonus Global Search & Self-Correction |
-| **2:00–2:30** | **Reflection & Thuyết minh** | Trả lời 10 câu hỏi kỹ thuật + Lecture Mapping + Action Plan |
-
----
-
-## 🛡️ Scale Guard (Quy tắc an toàn dữ liệu trong Lab)
-
-Trong thời lượng 2 giờ, để tránh cạn kiệt rate limit hoặc tràn bộ nhớ:
-- `LAB_MAX_ARTICLES = 1500` (Số bài báo tối đa)
-- `LAB_MAX_CHUNKS = 3000` (Số chunk văn bản tối đa)
-- `EXTRACTION_MAX_CHUNKS = 400` (Số chunk trích xuất đồ thị)
-- `CHUNK_WORDS = 220`, `CHUNK_OVERLAP_WORDS = 40`
-
----
-
-## 📂 Cấu trúc Repo
-
-```
-Day19-Track3-GraphRAG/
-├── README.md                                             # Hướng dẫn tổng quan, scale guard, setup, timeline
-├── ASSIGNMENT.md                                         # Đề bài chi tiết 5 modules & hướng dẫn thực hiện
-├── RUBRIC.md                                             # Thang điểm chi tiết (100đ + 10 bonus)
-├── .env.example                                          # Template biến môi trường
-├── .gitignore                                            # Cấu hình bỏ qua file lớn & API keys
-├── requirements.txt                                      # Thư viện Python cần thiết
-├── Day19_GraphRAG_vs_FlatRAG_Production_Lab_Guide.ipynb   # ★ File Notebook thực hành chính
-│
-├── data/                                                 # 📁 Chứa dữ liệu & Golden schema
-│   └── golden_dataset.csv                                # Schema & 5 câu hỏi đánh giá mẫu (G01–G05)
-│
-├── outputs/                                              # 📁 File kết quả xuất tự động từ notebook (*.csv)
-│   ├── graphrag_eval_results.csv                         # Chi tiết kết quả từng câu hỏi + điểm Judge
-│   └── graphrag_vs_flatrag_summary.csv                   # Bảng so sánh tổng hợp Flat RAG vs GraphRAG
-│
-├── reports/                                              # 📁 Báo cáo hoàn chỉnh của học viên (Chỉ 1 file duy nhất)
-│   └── lab_report.md                                     # ★ Thuyết minh kỹ thuật (10 câu) + Phân tích lỗi + Reflection
-│
-└── templates/                                            # 📁 Bản sao dự phòng gốc của mẫu báo cáo
-    └── lab_report.md
+```text
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4.1-mini
+JUDGE_PROVIDER=openai
+JUDGE_MODEL=gpt-4.1-mini
+LAB_MAX_ARTICLES=5000
+LAB_MAX_CHUNKS=12000
+EXTRACTION_MAX_CHUNKS=12000
+COREF_BATCH_SIZE=16
+EXTRACT_BATCH_SIZE=16
+LAB_RESET_GRAPH=0
 ```
 
+Chỉ đặt `LAB_RESET_GRAPH=1` nếu database Aura chỉ dùng cho lab này và an toàn để xoá graph cũ.
+
 ---
 
-## 🚀 Deliverables (Bài nộp)
+## One-click runner làm gì
 
-Học viên commit và push lên GitHub cá nhân:
-1. `Day19_GraphRAG_vs_FlatRAG_Production_Lab_Guide.ipynb` (Notebook đã chạy đầy đủ output các cell).
-2. `outputs/graphrag_eval_results.csv` và `outputs/graphrag_vs_flatrag_summary.csv`.
-3. `reports/lab_report.md` (Điền đầy đủ 2 phần: Thuyết minh kỹ thuật & Suy ngẫm cá nhân).
+`Day19_OpenAI_Colab_Run.ipynb`:
+
+1. `cd /content` trước khi xoá clone cũ, nên rerun không còn lỗi `getcwd`.
+2. Clone latest `main` vào `/content/lab19`.
+3. Chạy definitions từ notebook reference với đúng first 5,000 source rows.
+4. Chạy `openai_runtime_patch.py` để:
+   - đọc cả `NEO4J_USERNAME` và `NEO4J_USER`;
+   - validate Neo4j URI;
+   - dùng `description` làm HackerNoon article text fallback;
+   - dùng OpenAI cho coref/extraction/seed/generation mặc định;
+   - retry exponential khi LLM bị transient/rate-limit error;
+   - extract toàn bộ chunk được giữ lại từ first-5000 corpus.
+5. Tự preflight Neo4j + OpenAI trước khi bắt đầu hàng trăm LLM calls.
+6. Chạy `colab_solution.py` để build graph, FAISS indexes, audit artifacts và report.
+7. Chỉ khi solution hoàn tất mới chạy `official_golden_eval.py`.
+8. Official evaluator xác minh `flat_index`, entity matcher và Neo4j graph tồn tại trước khi benchmark 50 câu.
+9. Tự tải `/content/lab19_submission_official50.zip`.
+
+---
+
+## Reference notebook
+
+`Day19_GraphRAG_vs_FlatRAG_Production_Lab_Guide.ipynb` vẫn là notebook gốc của đề và được giữ để đối chiếu kiến trúc/prompt/rubric.
+
+Không dùng notebook reference làm flow chạy chính nếu mục tiêu là hoàn thành official Golden 50 bằng one-click runner.
+
+---
+
+## Thành phần kỹ thuật
+
+### Flat RAG
+
+- SentenceTransformer `all-MiniLM-L6-v2`
+- FAISS `IndexFlatIP`
+- top-k chunk retrieval
+
+### GraphRAG
+
+- Node types: `Company`, `Person`, `Technology`
+- Relations: `ACQUIRED`, `DEVELOPED`, `INVESTED_IN`, `FOUNDED`, `WORKED_AT`, `PARTNERED_WITH`, `USES`, `LEADS`
+- Neo4j bulk write bằng `UNWIND`
+- provenance trên edge: `source_chunk_id`, `published_date`, `evidence`, `confidence`
+- entity resolution: embedding candidate + lexical guard + Union-Find
+- traversal: seed extraction + exact/fuzzy match + BFS
+- super-node mitigation + global edge/context cap
+
+### Evaluation
+
+Official file:
+
+`data/graphrag_golden_50_first5000.csv`
+
+Schema:
+
+```text
+id, group, question, reference_answer, reference_evidence
+```
+
+Groups gồm factoid, multi-hop và cross-doc.
+
+Metrics xuất ra gồm LLM Judge scores, latency và token usage cho Flat RAG vs GraphRAG.
+
+---
+
+## Output cuối
+
+```text
+lab19_submission/
+├── data/
+│   ├── golden_dataset.csv
+│   └── graphrag_golden_50_first5000.csv
+├── outputs/
+│   ├── graphrag_eval_results.csv
+│   ├── graphrag_vs_flatrag_summary.csv
+│   ├── graphrag_eval_results_official50.csv
+│   ├── graphrag_vs_flatrag_summary_official50.csv
+│   ├── entity_resolution_audit.csv
+│   ├── guard_probe_audit.csv
+│   ├── top_degree_entities.csv
+│   └── extraction_errors.csv
+└── reports/
+    ├── lab_report.md
+    ├── official_golden_50.md
+    ├── technical_defense.md
+    ├── failure_analysis.md
+    └── reflection_LuongQuocKhanh.md
+```
+
+ZIP cuối:
+
+`/content/lab19_submission_official50.zip`
+
+Hai file rubric chính:
+
+- `outputs/graphrag_eval_results.csv`
+- `outputs/graphrag_vs_flatrag_summary.csv`
+
+sẽ được official evaluator ghi bằng kết quả Golden 50.
+
+---
+
+## Files quan trọng
+
+```text
+Day19_OpenAI_Colab_Run.ipynb                    # runner khuyến nghị
+Day19_GraphRAG_vs_FlatRAG_Production_Lab_Guide.ipynb  # reference đề
+openai_runtime_patch.py                          # provider + schema + Aura + preflight
+colab_solution.py                                # full pipeline
+ official_golden_eval.py                         # official 50-question evaluation
+COLAB_RUNBOOK.md                                 # hướng dẫn chạy
+ASSIGNMENT.md
+RUBRIC.md
+```
+
+## Submission check
+
+Trước khi nộp, kiểm tra:
+
+- pipeline chạy hết tới `[8/8]`;
+- official Golden chạy đủ 50 câu;
+- `invalid_provenance_edges == 0`;
+- `outputs/extraction_errors.csv` không có systematic API failure;
+- ZIP cuối đã được tải;
+- notebook executed + output/report CSV được commit nếu rubric yêu cầu.
