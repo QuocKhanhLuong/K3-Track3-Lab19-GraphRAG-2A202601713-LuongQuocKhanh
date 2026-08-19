@@ -1,0 +1,2 @@
+type,left,right,similarity,decision
+Company,Activision Blizzard,Activision Blizzard Inc.,0.9184913635253906,MERGE_VECTOR
